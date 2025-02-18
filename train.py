@@ -37,7 +37,7 @@ parser.add_argument('--base_lr', type=float, default=0.0005,
 parser.add_argument('--img_size', type=int,
                     default=256, help='input patch size of network input')
 parser.add_argument('--seed', type=int,
-                    default=2345, help='random seed')
+                    default=100, help='random seed')
 parser.add_argument('--vit_name', type=str,
                     default='vit_b', help='select one vit model')
 parser.add_argument('--ckpt', type=str, help='Pretrained checkpoint')

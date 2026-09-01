@@ -105,8 +105,16 @@ def main():
             value.requires_grad = False
         else:
             value.requires_grad = True
+    # The Lightweight Prompt Embedding Generator (LPEG) -- prompt_encoder's
+    # layernorm/fc1/fc2 submodules, inlined in PromptEncoder.forward -- is
+    # randomly initialized (it has no counterpart in the pretrained SAM
+    # checkpoint) and is one of the components the paper says is
+    # fine-tuned (Sec. 2: "fine-tunes the adapters, feature enhancing
+    # block, prompt embedding generator, and mask decoder"). Freezing it
+    # here left it at its random initialization for the entire run.
+    lpeg_param_names = ("layernorm", "fc1", "fc2")
     for n, value in sam.prompt_encoder.named_parameters():
-        value.requires_grad = False
+        value.requires_grad = any(name in n for name in lpeg_param_names)
 
     net1 = sam.cuda()
 

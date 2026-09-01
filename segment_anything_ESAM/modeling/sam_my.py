@@ -222,9 +222,6 @@ class Sam_my(nn.Module):
 
         input_images = self.preprocess(batched_input)
         image_embeddings, low_image_embeddings = self.image_encoder(input_images)
-        sparse_embeddings, dense_embeddings = self.prompt_encoder(
-                points=None, boxes=None, masks=None, image_embedding=image_embeddings
-        )
 
         embedding_moe = torch.cat([embed.unsqueeze(1) for embed in low_image_embeddings], dim=1).permute(0, 1, 4, 2, 3).contiguous()
 
@@ -235,6 +232,14 @@ class Sam_my(nn.Module):
         embedding_moe = self.attn(embedding_moe, embedding_moe, embedding_moe).reshape(bs, num_features, h, w, dim).permute(0, 1, 4, 2, 3).contiguous()
         embedding_moe = embedding_moe.mean(1)
         image_embeddings = image_embeddings + self.neck5(embedding_moe)
+
+        # LPEG (inlined in prompt_encoder.forward when image_embedding is
+        # passed) is described in the paper as consuming the MoE-FEB
+        # enhanced embedding ("enhanced image embeddings" as LPEG's input),
+        # so this must run after the MoE-FEB block above, not before it.
+        sparse_embeddings, dense_embeddings = self.prompt_encoder(
+                points=None, boxes=None, masks=None, image_embedding=image_embeddings
+        )
 
         low_res_masks, iou_predictions = self.mask_decoder(
                 image_embeddings=image_embeddings,

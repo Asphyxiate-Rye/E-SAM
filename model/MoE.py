@@ -138,13 +138,14 @@ class ExpertChoiceTokenNoisyTopkRouter(nn.Module):
 
     def forward(self, mh_output):
         logits = self.topkroute_linear(mh_output).reshape(-1, self.num_experts).T
-        noise_logits = self.noise_linear(mh_output).reshape(-1, self.num_experts).T
 
-        noise = torch.randn_like(logits) * F.softplus(noise_logits)
-        noisy_logits = logits + noise
+        if self.training:
+            noise_logits = self.noise_linear(mh_output).reshape(-1, self.num_experts).T
+            noise = torch.randn_like(logits) * F.softplus(noise_logits)
+            logits = logits + noise
 
-        top_k_logits, indices = noisy_logits.topk(self.top_k, dim=-1)
-        zeros = torch.full_like(noisy_logits, float('-inf'))
+        top_k_logits, indices = logits.topk(self.top_k, dim=-1)
+        zeros = torch.full_like(logits, float('-inf'))
         sparse_logits = zeros.scatter(-1, indices, top_k_logits)
         router_output = F.softmax(sparse_logits, dim=-1)
         return router_output, indices

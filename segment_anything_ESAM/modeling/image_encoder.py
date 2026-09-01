@@ -113,14 +113,18 @@ class ImageEncoderViT(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, features=None) -> torch.Tensor:
+        x = self.patch_embed(x)
+        if self.pos_embed is not None:
+            x = x + self.pos_embed
+
         output = []
         block_number = [0,1,2,3,4,5,6,7,8,9,10,11]
         for i,blk in enumerate(self.blocks):
             x = blk(x)
             if i in block_number:
                 output.append(x)
-            x = self.neck(x.permute(0, 3, 1, 2))
-            return x, output
+        x = self.neck(x.permute(0, 3, 1, 2))
+        return x, output
 
 
 class AttentionFusion(nn.Module):

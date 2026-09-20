@@ -144,7 +144,17 @@ class ExpertChoiceTokenNoisyTopkRouter(nn.Module):
             noise = torch.randn_like(logits) * F.softplus(noise_logits)
             logits = logits + noise
 
-        top_k_logits, indices = logits.topk(self.top_k, dim=-1)
+        # self.top_k is a fixed count sized for one specific (batch_size,
+        # image_size) combo (see sam_my.py's
+        # ExpertChoiceTokenSparseMoE(..., top_k=int(args.batch_size*12*196*2/4))).
+        # Any forward pass with fewer tokens than that -- an undersized last
+        # training batch (DataLoader's default drop_last=False), or a short
+        # eval volume chunked below top_k in utils.py's test_single_volume --
+        # makes topk() raise "index k out of range". Clamping to what's
+        # actually available is a no-op whenever the original fixed count
+        # already fits.
+        effective_top_k = min(self.top_k, logits.shape[-1])
+        top_k_logits, indices = logits.topk(effective_top_k, dim=-1)
         zeros = torch.full_like(logits, float('-inf'))
         sparse_logits = zeros.scatter(-1, indices, top_k_logits)
         router_output = F.softmax(sparse_logits, dim=-1)

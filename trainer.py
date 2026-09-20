@@ -50,30 +50,56 @@ def calc_loss(outputs, low_res_label_batch, ce_loss, dice_loss, dice_weight:floa
     return loss, loss_ce, loss_dice
 
 def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
-    from datasets.dataset_MMWHS import MMWHS_dataset, RandomGenerator, Sampler
+    # datasets/dataset_MMWHS.py was later replaced by dataset.py at the repo
+    # root (same content, see commit fbb8f1d "Create dataset.py"), but this
+    # import was never updated to match, so trainer_MMWHS raises
+    # ModuleNotFoundError on a clean checkout as released.
+    from dataset import MMWHS_dataset, RandomGenerator, Sampler
+    # The loop below is dataset-agnostic; only which Dataset class to build
+    # differs. BTCV/Synapse-CT/ACDC need no HU rewindowing and no label
+    # remap since prepare_btcv.py/prepare_synapse_ct.py/prepare_acdc.py
+    # already produce ready-to-use values (see datasets/dataset_BTCV.py).
+    # No training code for these three datasets exists anywhere in this
+    # repository's history; this reuses the same loop upstream only ever
+    # wired up for MMWHS.
+    if getattr(args, 'dataset', 'MMWHS') == 'BTCV':
+        from datasets.dataset_BTCV import BTCV_dataset as DatasetClass
+    else:
+        DatasetClass = MMWHS_dataset
     logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
+    # `writer` is used below (writer.add_scalar) but was never instantiated
+    # anywhere in this function; filled in here following the standard
+    # SummaryWriter(snapshot_path + '/log') pattern the tensorboardX import
+    # already assumes.
+    writer = SummaryWriter(snapshot_path + '/log')
     base_lr = args.base_lr
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
 
-    db_train = MMWHS_dataset(base_dir=args.root_path, list_dir=args.list_dir, split='train',
+    db_train = DatasetClass(base_dir=args.root_path, list_dir=args.list_dir, split='train',
                                transform=transforms.Compose(
                                    [RandomGenerator(output_size=[args.img_size, args.img_size],
                                                     low_res=[low_res, low_res])
                                     ]))
 
-    db_test = MMWHS_dataset(base_dir=args.val_path, list_dir=args.list_dir, split='val')
+    db_test = DatasetClass(base_dir=args.val_path, list_dir=args.list_dir, split='val')
 
     print("The length of train set is: {}".format(len(db_train)))
 
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
 
+    # drop_last=True: the MoE router's top_k is a fixed count derived from
+    # args.batch_size (model/MoE.py), not the actual batch size at runtime.
+    # Without dropping it, an epoch's final undersized batch has fewer
+    # tokens than top_k, which used to crash topk() before the clamp added
+    # there; dropping it here avoids relying on that clamp alone for the
+    # common case.
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True,
-                             num_workers=4, pin_memory=True,
+                             num_workers=4, pin_memory=True, drop_last=True,
                              worker_init_fn=worker_init_fn)
     valloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=4)
     if args.n_gpu > 1:
@@ -117,6 +143,16 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
             loss, loss_ce1, loss_dice1 = calc_loss_init_size(outputs, label_batch, ce_loss, dice_loss,
                                                              dice_weight=args.dice_param)
             loss.backward()
+            # Off by default: the paper authors confirmed by email on
+            # 2026-09-07 that they used no gradient clipping on any of the
+            # four datasets, so the default here reproduces that recipe
+            # exactly. In our own reruns without it, training on more than
+            # one dataset diverged sharply partway through (loss spikes in
+            # one step, val Dice collapses toward 0 and never recovers over
+            # the remaining epochs); pass --grad_clip_norm to enable
+            # clipping at that norm if the same instability shows up.
+            if getattr(args, 'grad_clip_norm', None):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip_norm)
             optimizer.step()
 
             if args.warmup and iter_num < args.warmup_period:
@@ -158,12 +194,17 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
 
             metric_list = np.array(metric_list)
             metric_avg = np.mean(metric_list, axis=0)
+            # Column 0 is Dice, column 1 is HD95 (see calculate_metric_percase_val
+            # in utils.py). Best-checkpoint selection stays on Dice, matching
+            # released behavior; HD95 is now also tracked, not silently dropped.
             performance = np.mean(metric_avg, axis=0)
-            logging.info(f'mean_dice {performance}')
-            writer.add_scalar('info/performance', performance, iter_num)
-            if performance > best_performance:
-                best_performance = performance
-                logging.info(f'Testing performance in best val model: mean_dice: {best_performance}')
+            mean_dice, mean_hd95 = performance[0], performance[1]
+            logging.info(f'mean_dice {mean_dice} mean_hd95 {mean_hd95}')
+            writer.add_scalar('info/performance', mean_dice, iter_num)
+            writer.add_scalar('info/mean_hd95', mean_hd95, iter_num)
+            if mean_dice > best_performance:
+                best_performance = mean_dice
+                logging.info(f'Testing performance in best val model: mean_dice: {best_performance}, mean_hd95: {mean_hd95}')
                 save_mode_path = os.path.join(snapshot_path, 'model_best.pth')
                 torch.save(model.state_dict(), save_mode_path)
                 logging.info(f"save model to {save_mode_path}")
@@ -177,3 +218,9 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
             iterator.close()
 
     return "Training Finished!"
+
+
+# BTCV/Synapse-CT/ACDC reuse the identical loop; the dataset class is
+# picked from args.dataset inside. Upstream shipped no entry point for
+# any of these three datasets.
+trainer_BTCV = trainer_MMWHS

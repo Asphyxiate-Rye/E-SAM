@@ -10,7 +10,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from typing import Any, Dict, List, Tuple
-from .image_encoder import ImageEncoderViT, ImageEncoderViT_features
+from .image_encoder import ImageEncoderViT  # ImageEncoderViT_features: dead import, class doesn't exist here or anywhere in this repo's history
 from .mask_decoder import MaskDecoder
 from .prompt_encoder import PromptEncoder
 from .multiscale_CNN import CNN

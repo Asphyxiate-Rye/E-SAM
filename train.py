@@ -52,6 +52,12 @@ parser.add_argument('--warmup_period', type=int, default=250,
 parser.add_argument('--AdamW', default=True, help='If activated, use AdamW to finetune SAM model')
 parser.add_argument('--module', type=str, default='sam_lora_image_encoder')
 parser.add_argument('--dice_param', type=float, default=0.8)
+parser.add_argument('--grad_clip_norm', type=float, default=None,
+                    help='Max gradient norm for torch.nn.utils.clip_grad_norm_. '
+                         'Off (None) by default, matching the paper authors '
+                         'confirmed recipe of no gradient clipping; set this if '
+                         'training diverges partway through (loss spike, val '
+                         'Dice collapsing to 0 without recovering).')
 parser.add_argument('--save_interval', type=int, default=5)
 parser.add_argument('--evl_chunk', type=int, default=16)  #  = args.batchsize * args.n_gpus
 parser.add_argument('--which_model', type=str, default='SAMmyConv_Adapter_add_ExpertChoiceTokenmoeMLP_Attention_todecoder_topkc=2')

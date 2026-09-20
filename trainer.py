@@ -143,13 +143,16 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
             loss, loss_ce1, loss_dice1 = calc_loss_init_size(outputs, label_batch, ce_loss, dice_loss,
                                                              dice_weight=args.dice_param)
             loss.backward()
-            # No gradient clipping anywhere in this loop as released. In our
-            # own reruns, training on more than one dataset diverged sharply
-            # partway through without it (loss spikes in one step, val Dice
-            # collapses toward 0 and never recovers over the remaining
-            # epochs). Bounding the gradient norm is the standard fix for
-            # that kind of single-step blowup.
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # Off by default: the paper authors confirmed by email on
+            # 2026-09-07 that they used no gradient clipping on any of the
+            # four datasets, so the default here reproduces that recipe
+            # exactly. In our own reruns without it, training on more than
+            # one dataset diverged sharply partway through (loss spikes in
+            # one step, val Dice collapses toward 0 and never recovers over
+            # the remaining epochs); pass --grad_clip_norm to enable
+            # clipping at that norm if the same instability shows up.
+            if getattr(args, 'grad_clip_norm', None):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip_norm)
             optimizer.step()
 
             if args.warmup and iter_num < args.warmup_period:
@@ -191,12 +194,17 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
 
             metric_list = np.array(metric_list)
             metric_avg = np.mean(metric_list, axis=0)
+            # Column 0 is Dice, column 1 is HD95 (see calculate_metric_percase_val
+            # in utils.py). Best-checkpoint selection stays on Dice, matching
+            # released behavior; HD95 is now also tracked, not silently dropped.
             performance = np.mean(metric_avg, axis=0)
-            logging.info(f'mean_dice {performance}')
-            writer.add_scalar('info/performance', performance, iter_num)
-            if performance > best_performance:
-                best_performance = performance
-                logging.info(f'Testing performance in best val model: mean_dice: {best_performance}')
+            mean_dice, mean_hd95 = performance[0], performance[1]
+            logging.info(f'mean_dice {mean_dice} mean_hd95 {mean_hd95}')
+            writer.add_scalar('info/performance', mean_dice, iter_num)
+            writer.add_scalar('info/mean_hd95', mean_hd95, iter_num)
+            if mean_dice > best_performance:
+                best_performance = mean_dice
+                logging.info(f'Testing performance in best val model: mean_dice: {best_performance}, mean_hd95: {mean_hd95}')
                 save_mode_path = os.path.join(snapshot_path, 'model_best.pth')
                 torch.save(model.state_dict(), save_mode_path)
                 logging.info(f"save model to {save_mode_path}")

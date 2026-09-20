@@ -3,15 +3,22 @@ dataset classes expect, using EXACTLY the case split that
 nhan/moe_research/manifests/synapse_btcv_v2.json already froze.
 
 Point of this script: run the (patched) upstream E-SAM code on the same
-data, same split, same 13 organs that nhan's framework produced
-E0=64.50 / E3=58.46 volumetric Dice on, so that any difference in result
-is attributable to the model/training code alone.
+data, same case split, and same 13 organs as nhan's framework, so that any
+difference in result is attributable to the model/training code alone. The
+case split is unaffected by the HU window below; nhan's own comparison
+numbers on this split were produced before the window fix and are being
+rerun.
 
 Preprocessing deliberately mirrors nhan's scripts/data/ct_conversion.py
 rather than E-SAM's own dataset.py:
-  - HU window [-125, 275] -> [0,1] (TransUNet's abdominal-CT convention,
-    which nhan uses). E-SAM's dataset.py hardcodes (x+750)/1500, a cardiac
-    window suited to MMWHS, and upstream ships no BTCV code at all.
+  - HU window [-150, 500] -> [0,1], confirmed for BTCV by the MoE-SAM
+    authors by email on 2026-09-07: "BTCV: intensity clipping and
+    normalization equivalent to mapping [-150, 500] to [0, 1]." An earlier
+    pass used the TransUNet abdominal-CT convention [-125, 275] instead;
+    the authors' reply showed that window is for their separate 8-organ
+    Synapse CT benchmark, not this 13-organ BTCV one. E-SAM's dataset.py
+    hardcodes (x+750)/1500, a cardiac window suited to MMWHS, and upstream
+    ships no BTCV code at all.
   - Native 512x512 kept on disk; the resize to img_size happens later in
     RandomGenerator/test_single_volume, exactly like nhan resizes in
     src/data/transforms.py.
@@ -30,7 +37,7 @@ import h5py
 import nibabel as nib
 import numpy as np
 
-HU_MIN, HU_MAX = -125.0, 275.0
+HU_MIN, HU_MAX = -150.0, 500.0
 
 
 def window(volume):

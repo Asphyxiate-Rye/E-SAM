@@ -12,9 +12,18 @@ each a short-axis stack of only ~5-15 slices -- unlike the ~100-300 slice CT
 volumes, so treating every frame as one "case" for train/test is standard
 practice in this literature, not a shortcut.
 
-Normalization: ACDC is MRI, not CT, so there is no fixed HU scale to window
-against. Per-volume min-max to [0,1] (own choice; the paper doesn't specify)
-is the simplest standard choice.
+Normalization: confirmed by the MoE-SAM authors by email on 2026-09-07:
+"ACDC: min-max normalization per loaded sample -- per slice during training
+and per volume during evaluation." What is loaded per training example is
+one 2D slice (see the npz branch of convert_split below), so training
+normalization here is per-slice min-max, computed independently for each
+slice rather than from the whole 3D volume's min/max; what is loaded per
+evaluation example is the full 3D frame (the h5 branch), so evaluation
+normalization is per-volume min-max over that frame. An earlier pass instead
+normalized once over the whole 3D volume before slicing (so every training
+slice from one volume shared that volume's min/max, not its own) and added
+a [0.5, 99.5] percentile clip before the min-max, neither of which the
+authors' reply describes; both are removed here to match their recipe.
 """
 import argparse
 import re
@@ -25,31 +34,26 @@ import nibabel as nib
 import numpy as np
 
 
-def normalize(volume):
-    """Percentile-clip then min-max to [0,1].
+def normalize(array):
+    """Plain min-max to [0,1], over whatever array is passed in.
 
-    Raw ACDC intensities are inconsistent across patients/sites: some
-    volumes are already rescaled to [0,255], others keep native scanner
-    units up to ~2300 with a handful of bright outlier voxels (partial
-    volume / vessel). A first pass used plain per-volume min-max, which is
-    not robust to those outliers -- for patients where the true max is
-    2-3x the 99th percentile, min-max crushes all real anatomy into a
-    small fraction of [0,1] while wasting the rest of the range on a few
-    outlier pixels, adding uncontrolled per-patient contrast noise. This
-    is the standard nnU-Net/MRI-pipeline fix: clip to [0.5, 99.5]
-    percentile first so a handful of extreme voxels can't dominate the
-    scale, then min-max the clipped range.
+    The caller decides the scope: convert_split calls this per 2D slice for
+    training data and per 3D volume for evaluation data, matching the
+    authors' "per loaded sample" description. A degenerate all-constant
+    array (max == min) would otherwise divide by zero; it normalizes to all
+    zeros instead, which only affects synthetic edge cases (a slice/volume
+    with a single intensity value throughout).
     """
-    lo, hi = np.percentile(volume, [0.5, 99.5])
+    lo, hi = float(array.min()), float(array.max())
     if hi <= lo:
-        return np.zeros_like(volume)
-    # np.percentile returns float64 scalars, which silently upcasts the
-    # float32 `volume` array below to float64 -- the h5 test volumes this
-    # writes then crash Conv2d at eval time ("Input type (double) and bias
-    # type (float) should be the same"); RandomGenerator's own explicit
-    # cast hid this for the training npz path, but nothing casts back for
-    # the val h5 path since it's read with no transform.
-    return np.clip((volume - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+        return np.zeros_like(array, dtype=np.float32)
+    # float64 min/max on a float32 array upcasts the result silently, which
+    # then crashes Conv2d at eval time ("Input type (double) and bias type
+    # (float) should be the same") for the h5 volumes this writes;
+    # RandomGenerator's own explicit cast hides this for the training npz
+    # path, but nothing casts back for the val h5 path since it is read
+    # with no transform.
+    return ((array - lo) / (hi - lo)).astype(np.float32)
 
 
 def find_frames(patient_dir: Path):
@@ -70,22 +74,28 @@ def convert_split(patients_root: Path, patient_dirs, npz_dir=None, h5_dir=None):
     slice_names, volume_names = [], []
     for patient_dir in sorted(patient_dirs):
         for tag, image_path, label_path in find_frames(patient_dir):
-            image = normalize(nib.load(image_path).get_fdata().astype(np.float32))
+            raw_image = nib.load(image_path).get_fdata().astype(np.float32)
             label = nib.load(label_path).get_fdata().astype(np.float32)
             case_id = f"{patient_dir.name}_{tag}"
 
             if npz_dir is not None:
                 kept = 0
-                for z in range(image.shape[2]):
+                for z in range(raw_image.shape[2]):
                     if not label[:, :, z].any():
                         continue
+                    # Normalized per slice, independently of the rest of the
+                    # volume, matching what a training example actually is.
+                    image_slice = normalize(raw_image[:, :, z])
                     name = f"{case_id}_slice{z:02d}"
                     np.savez(npz_dir / f"{name}.npz",
-                             image=image[:, :, z], label=label[:, :, z])
+                             image=image_slice, label=label[:, :, z])
                     slice_names.append(name)
                     kept += 1
-                print(f"[train] {case_id}: {kept}/{image.shape[2]} labeled slices")
+                print(f"[train] {case_id}: {kept}/{raw_image.shape[2]} labeled slices")
             else:
+                # Normalized once over the whole 3D frame, matching what an
+                # evaluation example actually is.
+                image = normalize(raw_image)
                 with h5py.File(h5_dir / f"{case_id}.h5", "w") as f:
                     f.create_dataset("image", data=image)
                     f.create_dataset("label", data=label)

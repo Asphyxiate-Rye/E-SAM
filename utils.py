@@ -227,13 +227,21 @@ def test_single_volume(image, label, net, args, classes, multimask_output, patch
                     pred = out
                 prediction[buoy:chunk_end, :, :] = pred
             buoy = chunk_end
+    # calculate_metric_percase_val (Dice + HD95, both via medpy with no voxel
+    # spacing passed in, i.e. voxel units) was already present but dead code
+    # as released -- nothing in this repository ever called it -- confirmed
+    # by the paper authors' email of 2026-09-07 to be what their own local
+    # copy's val_single_volume used, which this repository never shipped.
+    # validation.py already expects a 2-column (dice, hd95) result per class
+    # from this function (it reads performance[0] as mean_dice and
+    # performance[1] as hd), so it could not run as released; wiring the
+    # existing function in here is what that script was already written for.
     metric_list = []
-    metric_list_dice = []
     prediction = prediction.cpu().detach().numpy()
     label = label.cpu().detach().numpy()
     for i in range(1, classes + 1):
-        metric_list_dice.append(calculate_metric_percase(prediction == i, label == i))
-    return metric_list_dice
+        metric_list.append(calculate_metric_percase_val(prediction == i, label == i))
+    return metric_list
 
 
 def mask_latent_code_spatial_wise(latent_code, loss, percentile=1 / 3.0, random=False, loss_type='corr', if_detach=True, if_soft=False):

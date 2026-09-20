@@ -1,7 +1,9 @@
 import argparse
 import logging
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '6,7'
+# Hardcoded to the authors' own multi-GPU box (indices 6,7). Left unset here
+# so the caller's own CUDA_VISIBLE_DEVICES (or all visible GPUs by default)
+# is respected instead, since indices 6,7 will not exist on most machines.
 import random
 import numpy as np
 import torch
@@ -52,7 +54,7 @@ parser.add_argument('--module', type=str, default='sam_lora_image_encoder')
 parser.add_argument('--dice_param', type=float, default=0.8)
 parser.add_argument('--save_interval', type=int, default=5)
 parser.add_argument('--evl_chunk', type=int, default=16)  #  = args.batchsize * args.n_gpus
-parser.add_argument('--which_model', type=str, default='SAMmyConv_Adapter_add_ExpertChoiceTokenmoeMLP_Attention_todecoder_topkc=2'])
+parser.add_argument('--which_model', type=str, default='SAMmyConv_Adapter_add_ExpertChoiceTokenmoeMLP_Attention_todecoder_topkc=2')
 parser.add_argument("--rank", default=0, type=int, help="node rank for distributed training")
 parser.add_argument("--world_size", default=1, type=int, help="number of nodes for distributed training")
 parser.add_argument("--norm_name", default="batch", type=str, help="normalization name")

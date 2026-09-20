@@ -189,8 +189,24 @@ def test_single_volume(image, label, net, args, classes, multimask_output, patch
         z, x, y = image.shape[0], image.shape[1], image.shape[2]
         prediction = torch.zeros([image.shape[0], image.shape[1], image.shape[2]])
 
-        while (buoy + evl_ch) < image.shape[0]:
-            slices = image[buoy:buoy + evl_ch, :, :].unsqueeze(1)
+        # Was: `while (buoy + evl_ch) < z: ...` for full chunks, then a
+        # trailing chunk hardcoded to the *last* evl_ch slices
+        # (`image[z-evl_ch:z]`). For z < evl_ch (every ACDC volume, whose
+        # short-axis stacks are typically 8-20 slices against the default
+        # evl_ch=16) the while loop never runs and `z-evl_ch` is negative,
+        # which Python/NumPy indexing silently reinterprets as counting
+        # from the end rather than raising an error: `image[10-16:10]` on a
+        # 10-slice volume becomes `image[-6:10]`, i.e. only the last 6
+        # slices. `prediction[z-evl_ch:]` then only writes those same 6,
+        # leaving the first z-6 slices at their `torch.zeros(...)` init
+        # value (an all-background prediction the model never actually
+        # produced) for every affected volume, silently deflating Dice/HD
+        # for any dataset with volumes shorter than evl_ch. Replaced with a
+        # loop that always tiles the full [0, z) range exactly once,
+        # regardless of how z compares to evl_ch.
+        while buoy < image.shape[0]:
+            chunk_end = min(buoy + evl_ch, image.shape[0])
+            slices = image[buoy:chunk_end, :, :].unsqueeze(1)
             if x != input_size[0] or y != input_size[1]:
                 slices = F.interpolate(slices, size=(input_size[0], input_size[1]), mode='bilinear')
             new_x, new_y = slices.shape[2], slices.shape[3]  # [input_size[0], input_size[1]]
@@ -209,24 +225,8 @@ def test_single_volume(image, label, net, args, classes, multimask_output, patch
                     pred = F.interpolate(out.unsqueeze(1).float(), (x, y), mode='nearest').squeeze(1).long()
                 else:
                     pred = out
-                prediction[buoy:buoy + evl_ch, :, :] = pred
-            buoy += evl_ch
-
-        slices = image[image.shape[0]-evl_ch:image.shape[0], ...].unsqueeze(1)
-        if x != input_size[0] or y != input_size[1]:
-            slices = F.interpolate(slices, size=(input_size[0], input_size[1]), mode='bilinear')
-        inputs = repeat(slices, 'b c h w -> b (repeat c) h w', repeat=3)
-        net.eval()
-        with torch.no_grad():
-            outputs = net(inputs, multimask_output, patch_size[0], None)
-            output_masks = outputs['masks']
-            out = torch.argmax(torch.softmax(output_masks, dim=1), dim=1)
-            out_h, out_w = out.shape[1], out.shape[2]
-            if x != out_h or y != out_w:
-                pred = F.interpolate(out.unsqueeze(1).float(), (x, y), mode='nearest').squeeze(1).long()
-            else:
-                pred = out
-            prediction[image.shape[0]-evl_ch:, :, :] = pred
+                prediction[buoy:chunk_end, :, :] = pred
+            buoy = chunk_end
     metric_list = []
     metric_list_dice = []
     prediction = prediction.cpu().detach().numpy()

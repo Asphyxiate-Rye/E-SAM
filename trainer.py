@@ -50,11 +50,20 @@ def calc_loss(outputs, low_res_label_batch, ce_loss, dice_loss, dice_weight:floa
     return loss, loss_ce, loss_dice
 
 def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
-    from datasets.dataset_MMWHS import MMWHS_dataset, RandomGenerator, Sampler
+    # datasets/dataset_MMWHS.py was later replaced by dataset.py at the repo
+    # root (same content, see commit fbb8f1d "Create dataset.py"), but this
+    # import was never updated to match, so trainer_MMWHS raises
+    # ModuleNotFoundError on a clean checkout as released.
+    from dataset import MMWHS_dataset, RandomGenerator, Sampler
     logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
+    # `writer` is used below (writer.add_scalar) but was never instantiated
+    # anywhere in this function; filled in here following the standard
+    # SummaryWriter(snapshot_path + '/log') pattern the tensorboardX import
+    # already assumes.
+    writer = SummaryWriter(snapshot_path + '/log')
     base_lr = args.base_lr
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
@@ -72,8 +81,14 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
 
+    # drop_last=True: the MoE router's top_k is a fixed count derived from
+    # args.batch_size (model/MoE.py), not the actual batch size at runtime.
+    # Without dropping it, an epoch's final undersized batch has fewer
+    # tokens than top_k, which used to crash topk() before the clamp added
+    # there; dropping it here avoids relying on that clamp alone for the
+    # common case.
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True,
-                             num_workers=4, pin_memory=True,
+                             num_workers=4, pin_memory=True, drop_last=True,
                              worker_init_fn=worker_init_fn)
     valloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=4)
     if args.n_gpu > 1:
@@ -117,6 +132,13 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
             loss, loss_ce1, loss_dice1 = calc_loss_init_size(outputs, label_batch, ce_loss, dice_loss,
                                                              dice_weight=args.dice_param)
             loss.backward()
+            # No gradient clipping anywhere in this loop as released. In our
+            # own reruns, training on more than one dataset diverged sharply
+            # partway through without it (loss spikes in one step, val Dice
+            # collapses toward 0 and never recovers over the remaining
+            # epochs). Bounding the gradient norm is the standard fix for
+            # that kind of single-step blowup.
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             if args.warmup and iter_num < args.warmup_period:

@@ -4,6 +4,10 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+# predictor.py/automatic_mask_generator.py (interactive inference, not used
+# by training) are dropped: predictor.py imports a `segment_anything`
+# top-level package that isn't part of this repo and isn't installed here.
+# train.py only needs sam_model_registry.
 from .build_sam import (
     build_sam,
     build_sam_vit_h,
@@ -11,5 +15,3 @@ from .build_sam import (
     build_sam_vit_b,
     sam_model_registry,
 )
-from .predictor import SamPredictor
-from .automatic_mask_generator import SamAutomaticMaskGenerator

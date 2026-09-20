@@ -55,6 +55,17 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
     # import was never updated to match, so trainer_MMWHS raises
     # ModuleNotFoundError on a clean checkout as released.
     from dataset import MMWHS_dataset, RandomGenerator, Sampler
+    # The loop below is dataset-agnostic; only which Dataset class to build
+    # differs. BTCV/Synapse-CT/ACDC need no HU rewindowing and no label
+    # remap since prepare_btcv.py/prepare_synapse_ct.py/prepare_acdc.py
+    # already produce ready-to-use values (see datasets/dataset_BTCV.py).
+    # No training code for these three datasets exists anywhere in this
+    # repository's history; this reuses the same loop upstream only ever
+    # wired up for MMWHS.
+    if getattr(args, 'dataset', 'MMWHS') == 'BTCV':
+        from datasets.dataset_BTCV import BTCV_dataset as DatasetClass
+    else:
+        DatasetClass = MMWHS_dataset
     logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
@@ -68,13 +79,13 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
 
-    db_train = MMWHS_dataset(base_dir=args.root_path, list_dir=args.list_dir, split='train',
+    db_train = DatasetClass(base_dir=args.root_path, list_dir=args.list_dir, split='train',
                                transform=transforms.Compose(
                                    [RandomGenerator(output_size=[args.img_size, args.img_size],
                                                     low_res=[low_res, low_res])
                                     ]))
 
-    db_test = MMWHS_dataset(base_dir=args.val_path, list_dir=args.list_dir, split='val')
+    db_test = DatasetClass(base_dir=args.val_path, list_dir=args.list_dir, split='val')
 
     print("The length of train set is: {}".format(len(db_train)))
 
@@ -199,3 +210,9 @@ def trainer_MMWHS(args, model, snapshot_path, multimask_output, low_res):
             iterator.close()
 
     return "Training Finished!"
+
+
+# BTCV/Synapse-CT/ACDC reuse the identical loop; the dataset class is
+# picked from args.dataset inside. Upstream shipped no entry point for
+# any of these three datasets.
+trainer_BTCV = trainer_MMWHS

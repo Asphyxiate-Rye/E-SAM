@@ -142,7 +142,7 @@ def main():
 
     low_res = img_embedding_size * 4
 
-    trainer = {'MMWHS': trainer_MMWHS}
+    trainer = {'MMWHS': trainer_MMWHS, 'BTCV': trainer_BTCV}
     trainer[args.dataset](args, net1, args.snapshot_path, multimask_output, low_res)
 
 
